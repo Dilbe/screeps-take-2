@@ -31,6 +31,36 @@ class NewState extends State {
 	}
 }
 
+const locationCache = {};
+const STUCK_TICKS = 2;      // ticks standing still (not fatigued) before we path around creeps
+const AVOID_TICKS = 5;      // how long to keep avoiding creeps once stuck
+
+// extra: more moveTo options, e.g. { range: 1 }. reusePath and ignoreCreeps are set by MoveCreep
+function MoveCreep(creep, destination, extra = {}){
+	let entry = locationCache[creep.name];
+	if(entry == null || entry.time != Game.time - 1){
+		// first time, or MoveCreep wasn't called last tick: start fresh
+		entry = locationCache[creep.name] = { lastPos: creep.pos, stuck: 0, avoidUntil: 0 };
+	}else if(creep.pos.isEqualTo(entry.lastPos) && creep.fatigue == 0){
+		entry.stuck++;
+	}else{
+		entry.stuck = 0;
+	}
+
+	if(entry.stuck >= STUCK_TICKS){
+		entry.avoidUntil = Game.time + AVOID_TICKS;
+		delete creep.memory._move;   // throw away the cached path that walks into the blocker
+	}
+
+	entry.lastPos = creep.pos;
+	entry.time = Game.time;
+
+	const avoiding = Game.time < entry.avoidUntil;
+	return creep.moveTo(destination, withPath(Object.assign({}, extra, avoiding
+		? { reusePath: 5, ignoreCreeps: false }
+		: { reusePath: 50, ignoreCreeps: true })));
+}
+
 class HarvestState extends State {
     run(creep, originRoom) {
 		if(creep.store[RESOURCE_ENERGY] < creep.store.getCapacity()){
@@ -42,7 +72,7 @@ class HarvestState extends State {
 					// withdraw only takes effect after the tick; the full check above catches it next tick
 					const result = creep.withdraw(container, RESOURCE_ENERGY);
 					if(result == ERR_NOT_IN_RANGE){
-						creep.moveTo(container, withPath({ reusePath: 50, ignoreCreeps: true }));
+						MoveCreep(creep, container);
 					}
 					return;
 				}
@@ -176,7 +206,8 @@ class FillState extends State {
 
 		const result = creep.transfer(target, RESOURCE_ENERGY);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(target, withPath({ reusePath: 10 }));
+			MoveCreep(creep, target);
+			//creep.moveTo(target, withPath({ reusePath: 10 }));
 		}else if(result == OK){
 			// the target is probably full next tick; search again then
 			delete creep.memory.fillTargetId;
@@ -291,7 +322,7 @@ class WithdrawState extends State {
 		const result = creep.withdraw(target, RESOURCE_ENERGY);
 		if(result == ERR_NOT_IN_RANGE){
 			// range 1: the target may be taken, e.g. the miner stands on the source container
-			creep.moveTo(target, withPath({ range: 1, reusePath: 50, ignoreCreeps: true }));
+			MoveCreep(creep, target, { range: 1 });
 		}
 	}
 }
@@ -320,7 +351,7 @@ class TransferState extends State {
 
 		const result = creep.transfer(target, RESOURCE_ENERGY);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(target, withPath({ range: 1, reusePath: 50, ignoreCreeps: true }));
+			MoveCreep(creep, target, { range: 1 });
 		}
 	}
 }
@@ -392,7 +423,7 @@ class BuildState extends State {
 		
 		const result = creep.build(site);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(site, withPath({ reusePath: 50, ignoreCreeps: true }));
+			MoveCreep(creep, site);
 		}
     }
 }

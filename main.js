@@ -1,4 +1,4 @@
-const { MyRoom } = require('myroom');
+const { MyRoom } = require('room.main');
 
 console.log(Game.time);
 
