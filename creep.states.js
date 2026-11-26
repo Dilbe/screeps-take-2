@@ -1,5 +1,15 @@
 const { codeToString, sayReturnCode } = require('util');
 
+// moveTo options, plus a drawn path when Memory.drawPaths is true.
+// drawing costs a little CPU every tick, so toggle it in the console: Memory.drawPaths = true / false
+const PATH_STYLE = { stroke: '#ffaa00', lineStyle: 'dashed', opacity: 0.5 };
+function withPath(options = {}){
+	if(Memory.drawPaths){
+		options.visualizePathStyle = PATH_STYLE;
+	}
+	return options;
+}
+
 class State {
     NextState;
 
@@ -32,12 +42,16 @@ class HarvestState extends State {
 					// withdraw only takes effect after the tick; the full check above catches it next tick
 					const result = creep.withdraw(container, RESOURCE_ENERGY);
 					if(result == ERR_NOT_IN_RANGE){
-						creep.moveTo(container, { reusePath: 50 });
+						creep.moveTo(container, withPath({ reusePath: 50, ignoreCreeps: true }));
 					}
 					return;
 				}
 			}
 
+			// only harvest if no miner exists.
+			if(originRoom.MinerExists()){
+				return;
+			}
 			// harvest some more
 			const source = originRoom.GetSource();
 			let result = creep.harvest(source);
@@ -47,9 +61,9 @@ class HarvestState extends State {
 				const free = spots.find(s => originRoom.Room.lookForAt(LOOK_CREEPS, s.x, s.y).length === 0);
 				let moveResult = OK;
 				if(free){
-					moveResult = creep.moveTo(free.x, free.y, { reusePath: 50 });
+					moveResult = creep.moveTo(free.x, free.y, withPath({ reusePath: 50 }));
 				}else if(creep.pos.getRangeTo(source) > 2){
-					moveResult = creep.moveTo(source, { range: 2, reusePath: 50 });
+					moveResult = creep.moveTo(source, withPath({ range: 2, reusePath: 50 }));
 				}
 				sayReturnCode(creep, moveResult);
 			}
@@ -83,7 +97,7 @@ class PickupState extends State {
 
 		const result = creep.pickup(target);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(target, { reusePath: 10 });
+			creep.moveTo(target, withPath({ reusePath: 10 }));
 		}else if(result == OK){
 			// the pile may be gone next tick; search again then
 			delete creep.memory.pickupTargetId;
@@ -103,7 +117,10 @@ class MinerState extends State {
 		if(spot && !creep.pos.isEqualTo(spot.x, spot.y)){
 			// same costs as GetMinerLeadTime() uses (roads 1, plain 2, swamp 10), so the miner prefers roads and
 			// walks the route that the lead time was calculated for
-			creep.moveTo(spot.x, spot.y, { reusePath: 50, plainCost: 2, swampCost: 10 });
+			const returnCode = creep.moveTo(spot.x, spot.y, withPath({ reusePath: 50, plainCost: 2, swampCost: 10 }));
+			if(returnCode != OK){
+				sayReturnCode(creep, returnCode)
+			}
 		}
 
 		// harvest uses the position at the start of the tick, so this already works while walking past the source
@@ -123,7 +140,7 @@ class MinerState extends State {
 		let bestRange = Infinity;
 		for(const s of originRoom.GetHarvestSpots(source)){
 			const creeps = originRoom.Room.lookForAt(LOOK_CREEPS, s.x, s.y);
-			if(creeps.length > 0 && creeps[0].id !== creep.id) continue;
+			//if(creeps.length > 0 && creeps[0].id !== creep.id) continue;
 			const range = container ? container.pos.getRangeTo(s.x, s.y) : 0;
 			if(range < bestRange){
 				best = s;
@@ -159,7 +176,7 @@ class FillState extends State {
 
 		const result = creep.transfer(target, RESOURCE_ENERGY);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(target, { reusePath: 10 });
+			creep.moveTo(target, withPath({ reusePath: 10 }));
 		}else if(result == OK){
 			// the target is probably full next tick; search again then
 			delete creep.memory.fillTargetId;
@@ -199,7 +216,7 @@ class RepairState extends State {
 
 		const result = creep.repair(target);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(target, { reusePath: 10 });
+			creep.moveTo(target, withPath({ reusePath: 10 }));
 		}
 	}
 }
@@ -224,7 +241,7 @@ class KeepControllerState extends State {
 
 		const result = creep.upgradeController(controller);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(controller, { range: 3, reusePath: 50 });
+			creep.moveTo(controller, withPath({ range: 3, reusePath: 50 }));
 		}
 	}
 }
@@ -239,9 +256,125 @@ class UpgradeState extends State {
 		const controller = originRoom.Room.controller;
 		const result = creep.upgradeController(controller);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(controller);
+			creep.moveTo(controller, withPath());
 		}		
     }
+}
+
+// takes energy from a target until full.
+// getTarget: (creep, originRoom) => the structure to withdraw from, or null. it's called every tick,
+// because game objects are only valid for the tick they were looked up in.
+// goes to NextState when full, or when the target is empty and the creep already has some energy
+// (only checked next to the target, so a creep that's still walking there doesn't turn around)
+class WithdrawState extends State {
+	constructor(nextState, getTarget){
+		super(nextState);
+		this.GetTarget = getTarget;
+	}
+
+	run(creep, originRoom) {
+		// store reflects the start of this tick; withdraw() only takes effect after the tick
+		if(creep.store.getFreeCapacity(RESOURCE_ENERGY) == 0){
+			return this.NextState;
+		}
+
+		const target = this.GetTarget(creep, originRoom);
+		if(target == null){
+			creep.say("kill me");
+			return;   // nothing to withdraw from (yet)
+		}
+
+		if(creep.pos.isNearTo(target) && target.store[RESOURCE_ENERGY] == 0 && creep.store[RESOURCE_ENERGY] > 0){
+			return this.NextState;
+		}
+
+		const result = creep.withdraw(target, RESOURCE_ENERGY);
+		if(result == ERR_NOT_IN_RANGE){
+			// range 1: the target may be taken, e.g. the miner stands on the source container
+			creep.moveTo(target, withPath({ range: 1, reusePath: 50, ignoreCreeps: true }));
+		}
+	}
+}
+
+// brings energy to a target until empty.
+// getTarget: (creep, originRoom) => the structure to transfer to, or null. it's called every tick,
+// because game objects are only valid for the tick they were looked up in.
+// goes to NextState when the creep is empty; waits next to the target while it's full
+class TransferState extends State {
+	constructor(nextState, getTarget){
+		super(nextState);
+		this.GetTarget = getTarget;
+	}
+
+	run(creep, originRoom) {
+		// store reflects the start of this tick; transfer() only takes effect after the tick
+		if(creep.store[RESOURCE_ENERGY] == 0){
+			return this.NextState;
+		}
+
+		const target = this.GetTarget(creep, originRoom);
+		if(target == null){
+			creep.say("kill me");
+			return;   // nothing to transfer to (yet)
+		}
+
+		const result = creep.transfer(target, RESOURCE_ENERGY);
+		if(result == ERR_NOT_IN_RANGE){
+			creep.moveTo(target, withPath({ range: 1, reusePath: 50, ignoreCreeps: true }));
+		}
+	}
+}
+
+// dedicated upgrader: stands next to the controller container and within range 3 of the controller,
+// so it can take energy and upgrade without walking, forever
+class ControllerUpgradeState extends State {
+	run(creep, originRoom) {
+		const controller = originRoom.Room.controller;
+		const container = originRoom.GetControllerContainer();
+		if(container == null) return;   // not built (yet)
+
+		const spot = this.GetSpot(creep, controller, container, originRoom);
+		if(spot == null){
+			// all good tiles are taken; at least get in upgrade range
+			if(!creep.pos.inRangeTo(controller, 3)){
+				creep.moveTo(controller, withPath({ range: 3, reusePath: 50 }));
+			}
+		}else if(!creep.pos.isEqualTo(spot.x, spot.y)){
+			creep.moveTo(spot.x, spot.y, withPath({ reusePath: 50 }));
+		}
+
+		// both use the position and store at the start of this tick, and can be done in the same tick
+		const energy = creep.store[RESOURCE_ENERGY];
+		if(energy > 0){
+			creep.upgradeController(controller);
+		}
+		// only withdraw when running low: saves the 0.2 CPU of withdrawing every tick.
+		// upgrading uses 1 energy per WORK part per tick, so this tops up before the creep runs out
+		const upgradePerTick = creep.getActiveBodyparts(WORK) * UPGRADE_CONTROLLER_POWER;
+		if(energy < 2 * upgradePerTick && container.store[RESOURCE_ENERGY] > 0 && creep.pos.isNearTo(container)){
+			creep.withdraw(container, RESOURCE_ENERGY);
+		}
+	}
+
+	// a free tile next to the container and within range 3 of the controller; the creep's own tile if it's already on one
+	GetSpot(creep, controller, container, originRoom){
+		if(creep.pos.isNearTo(container) && creep.pos.inRangeTo(controller, 3)){
+			return creep.pos;
+		}
+		const terrain = originRoom.Room.getTerrain();
+		for(let dx = -1; dx <= 1; dx++){
+			for(let dy = -1; dy <= 1; dy++){
+				const x = container.pos.x + dx;
+				const y = container.pos.y + dy;
+				if(terrain.get(x, y) === TERRAIN_MASK_WALL) continue;
+				if(controller.pos.getRangeTo(x, y) > 3) continue;
+				if(originRoom.Room.lookForAt(LOOK_STRUCTURES, x, y).some(s => OBSTACLE_OBJECT_TYPES.includes(s.structureType))) continue;
+				if(originRoom.Room.lookForAt(LOOK_CREEPS, x, y).length > 0) continue;
+				return { x, y };
+			}
+		}
+		return null;
+	}
 }
 
 class BuildState extends State {
@@ -259,15 +392,14 @@ class BuildState extends State {
 		
 		const result = creep.build(site);
 		if(result == ERR_NOT_IN_RANGE){
-			creep.moveTo(site);
+			creep.moveTo(site, withPath({ reusePath: 50, ignoreCreeps: true }));
 		}
     }
 }
 
 const UPGRADER_STATES = {
-    new: new NewState('harvest'),
-    harvest: new HarvestState('upgrade'),
-    upgrade: new UpgradeState('harvest'),
+    new: new NewState('upgrade'),
+    upgrade: new ControllerUpgradeState('harvest'),
 };
 
 const BUILDER_STATES = {
@@ -292,10 +424,18 @@ const MINER_STATES = {
     mine: new MinerState(null),
 };
 
+const HAULER_STATES = {
+    new: new NewState('load'),
+    pickup: new PickupState('load'),
+    load: new WithdrawState('fill', (creep, room) => room.GetSourceContainer()),
+    fill: new FillState('deliver'),
+    deliver: new TransferState('pickup', (creep, room) => room.GetControllerContainer()),
+};
+
 const CREEP_CLASSES = {
 	miner : MINER_STATES,
 	upgrader : UPGRADER_STATES,
-	builder : BUILDER_STATES,
+	hauler : HAULER_STATES,
 	general : GENERAL_STATES
 };
 

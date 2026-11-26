@@ -2,7 +2,7 @@ const { MyRoom } = require('myroom');
 
 console.log(Game.time);
 
-
+Memory.drawPaths = false;
 let mycache = {};   // runs once per global reset, then stays
 
 module.exports.loop = function () {

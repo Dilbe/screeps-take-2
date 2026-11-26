@@ -21,12 +21,16 @@ function scaledBody(energy, pattern, filler){
 // body per creep class, scaled to the energy the room can spend on it
 const BODY_BUILDERS = {
 	general: energy => scaledBody(energy, [WORK,CARRY,MOVE], [CARRY,MOVE]),
-	upgrader: energy => scaledBody(energy, [WORK,CARRY,MOVE], [CARRY,MOVE]),
+	hauler: energy => scaledBody(energy, [CARRY,MOVE], [CARRY,MOVE]),
 	builder: energy => scaledBody(energy, [WORK,CARRY,MOVE], [CARRY,MOVE]),
 	// a source gives 10 energy/tick, which 5 WORK parts fully harvest; more WORK is wasted.
 	// one MOVE is enough, the miner only walks to the source once
 	miner: energy => {
-		const work = Math.max(1, Math.min(5, Math.floor((energy - bodyCost([CARRY,MOVE])) / BODYPART_COST[WORK])));
+		const work = Math.max(1, Math.min(6, Math.floor((energy - bodyCost([CARRY,MOVE])) / BODYPART_COST[WORK])));
+		return [...Array(work).fill(WORK), CARRY, MOVE];
+	},
+	upgrader: energy => {
+		const work = Math.max(1, Math.min(4, Math.floor((energy - bodyCost([CARRY,MOVE])) / BODYPART_COST[WORK])));
 		return [...Array(work).fill(WORK), CARRY, MOVE];
 	},
 };
@@ -132,8 +136,8 @@ class MyRoom {
 		switch(this.GetLevel()){
 			case 0: return {};
 			case 1: return { general: 2 };
-			case 2: return { general: 4, miner: 1 };
-			case 3: return { general: 4, miner: 1 };
+			case 2: return { general: 3, miner: 1 };
+			case 3: return { general: 1, miner: 1, hauler: 4, upgrader: 2 };
 			default: return { general: 4, miner: 1 };
 		}
 	}
@@ -175,7 +179,7 @@ class MyRoom {
 		//  0: not captured yet.
 		//  1: no buildings built.
 		//  2: built the planned container next to the source.
-		//  3: also built the planned container near the controller.
+		//  3: also built the container near the controller.
 		//  4+: ???
 		if(this.Room.controller.level === 0){
 			this.MyLevel = 0;
@@ -351,6 +355,10 @@ class MyRoom {
 			this.HarvestSpots[source.id] = spots;
 		}
 		return this.HarvestSpots[source.id];
+	}
+	
+	MinerExists(){
+		return true;
 	}
 }
 
