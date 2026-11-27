@@ -1,5 +1,6 @@
 const { runStateMachine } = require('creep.states');
 const { codeToString } = require('util');
+const { HarvestRoom } = require('room.harvest');
 
 function bodyCost(body){
 	return body.reduce((sum, part) => sum + BODYPART_COST[part], 0);
@@ -82,10 +83,23 @@ class MyRoom {
 	RoomName;
 	Room;
 	Source;
+	HarvestRooms = [];
+
 
 	constructor(roomName){
 		console.log(roomName + ' room created');
 		this.RoomName = roomName;
+
+		let room = this.getRoom();
+		if(room.memory.harvestRooms != null)
+		{
+			for(const roomName of room.memory.harvestRooms){
+				this.HarvestRooms.push(new HarvestRoom(roomName, this));
+			}
+		}
+
+		//room.memory.harvestRooms = [];
+		//room.memory.harvestRooms.push("W9N5");
 	}
 
 	Reset(){
@@ -129,6 +143,14 @@ class MyRoom {
 		}
 
 		this.SpawnMissingCreeps(counts);
+
+		this.DoHarvestRooms();
+	}
+
+	DoHarvestRooms(){
+		for(const harvestRoom of this.HarvestRooms){
+			harvestRoom.DoLogic();
+		}
 	}
 
 	// how many creeps of each class this room wants
@@ -137,7 +159,9 @@ class MyRoom {
 			case 0: return {};
 			case 1: return { general: 2 };
 			case 2: return { general: 3, miner: 1 };
-			case 3: return { general: 1, miner: 1, hauler: 4, upgrader: 2 };
+			case 3: 
+				let builderCount = 0;
+				return { general: 1, miner: 1, hauler: 4, upgrader: 2, builder: builderCount };
 			default: return { general: 4, miner: 1 };
 		}
 	}

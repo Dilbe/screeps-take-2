@@ -115,9 +115,17 @@ class PickupState extends State {
 		// remember the target, so findClosestByPath isn't needed every tick
 		let target = Game.getObjectById(creep.memory.pickupTargetId);
 		if(target == null){
-			target = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
-				filter: r => r.resourceType == RESOURCE_ENERGY
+			// first try to pickup from tombstones.
+			target = creep.pos.findClosestByPath(FIND_TOMBSTONES, {
+				filter: t => t.store.getUsedCapacity(RESOURCE_ENERGY)
 			});
+			// if no tombstones found, then look for energy on the ground.
+			if(target == null)
+			{
+				target = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+					filter: r => r.resourceType == RESOURCE_ENERGY
+				});
+			}
 			if(target == null){
 				delete creep.memory.pickupTargetId;
 				return this.NextState;
@@ -125,12 +133,16 @@ class PickupState extends State {
 			creep.memory.pickupTargetId = target.id;
 		}
 
-		const result = creep.pickup(target);
-		if(result == ERR_NOT_IN_RANGE){
+		const returnCode = target instanceof Tombstone
+			? creep.withdraw(target, RESOURCE_ENERGY)
+			: creep.pickup(target);
+		if(returnCode == ERR_NOT_IN_RANGE){
 			creep.moveTo(target, withPath({ reusePath: 10 }));
-		}else if(result == OK){
+		}else if(returnCode == OK){
 			// the pile may be gone next tick; search again then
 			delete creep.memory.pickupTargetId;
+		}else{
+			sayReturnCode(creep, returnCode);
 		}
 	}
 }
@@ -436,7 +448,8 @@ const UPGRADER_STATES = {
 const BUILDER_STATES = {
     new: new NewState('harvest'),
     harvest: new HarvestState('build'),
-    build: new BuildState('harvest'),
+    build: new BuildState('repair'),
+    repair: new RepairState('harvest'),
 };
 
 const GENERAL_STATES = {
@@ -444,9 +457,9 @@ const GENERAL_STATES = {
     pickup: new PickupState('harvest'),
     harvest: new HarvestState('keepController'),
     keepController: new KeepControllerState('fill'),
-    fill: new FillState('repair'),
-    repair: new RepairState('build'),
-    build: new BuildState('upgrade'),
+    fill: new FillState('build'),
+    build: new BuildState('repair'),
+    repair: new RepairState('upgrade'),
     upgrade: new UpgradeState('pickup'),
 };
 
@@ -467,7 +480,8 @@ const CREEP_CLASSES = {
 	miner : MINER_STATES,
 	upgrader : UPGRADER_STATES,
 	hauler : HAULER_STATES,
-	general : GENERAL_STATES
+	general : GENERAL_STATES,
+	builder : BUILDER_STATES
 };
 
 function runStateMachine(creep, originRoom) {
